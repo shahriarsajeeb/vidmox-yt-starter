@@ -16,7 +16,9 @@ import {
 import Link from "next/link";
 import SecuritySection from "@/components/security";
 import DeleteAccountModal from "@/components/modals/delete-account.modal";
-import { useUser } from "@clerk/nextjs";
+import { useAuth, useUser } from "@clerk/nextjs";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { User } from "@clerk/nextjs/server";
 
 const tabs = ["General", "Developer Access", "Security"];
 
@@ -30,6 +32,8 @@ export default function SettingsPage() {
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [copied, setCopied] = useState(false);
   const { user, isLoaded } = useUser();
+  const { getToken, isSignedIn } = useAuth();
+  const queryClient = useQueryClient();
 
   const handleCopy = () => {
     navigator.clipboard.writeText(secretKey);
@@ -38,7 +42,20 @@ export default function SettingsPage() {
   };
 
   const handleGenerateSecretKey = async () => {
-    setShowKeyModal(!showKeyModal);
+    const token = getToken();
+    const res: any = await fetch(
+      `${process.env.NEXT_PUBLIC_SERVER_URI}/api-keys`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+    const response = await res.json();
+    setSecretKey(response.key);
+    setShowKeyModal(true);
+    queryClient.invalidateQueries({ queryKey: ["Api-Key"] });
   };
 
   const toggleDropdown = (key: string) => {
@@ -48,6 +65,46 @@ export default function SettingsPage() {
   if (!isLoaded) {
     return null;
   }
+
+  const { data: apiKeys, isLoading } = useQuery({
+    queryKey: ["Api-Key"],
+    queryFn: async () => {
+      const token = await getToken();
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_SERVER_URI}/api-keys`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+      const res = await response.json();
+      return res;
+    },
+    enabled: isLoaded && isSignedIn,
+  });
+
+  const handleRegenerateKey = async (keyId: string) => {
+    const token = getToken();
+    const res: any = await fetch(
+      `${process.env.NEXT_PUBLIC_SERVER_URI}/api-keys/${keyId}/regenerate`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+    const response = await res.json();
+    setSecretKey(response.key);
+    setShowKeyModal(true);
+    queryClient.invalidateQueries({ queryKey: ["Api-Key"] });
+  };
+
+  const cooldownOver =
+    apiKeys && apiKeys[0]?.createdAt
+      ? Date.now() - new Date(apiKeys[0]?.createdAt).getTime() > 5 * 60 * 1000
+      : true;
 
   return (
     <div className="text-black dark:text-white">
@@ -260,48 +317,54 @@ export default function SettingsPage() {
               </h2>
             </div>
             {/* Key List */}
-
-            {/* <div className="bg-gray-100 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-md px-4 py-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-xs dark:text-slate-400">
-                    Key ID: dev_sk_1234...abcd
-                  </p>
-                  <p className="mt-1 font-mono dark:text-white tracking-wider">
-                    ********************
-                  </p>
-                  <p className="mt-1 text-sm dark:text-gray-200">
-                    Last used:{" "}
-                    <span className="dark:text-white">Not use yet!</span>
-                  </p>
-                </div>
-                <div className="flex gap-2">
-                  <div className="flex gap-2">
-                    {cooldownOver ? (
-                      <button
-                        className="text-xs px-2 py-1 rounded-md border border-yellow-600 dark:text-yellow-400 dark:hover:bg-yellow-700/40"
-                        onClick={handleGenerateSecretKey}
-                      >
-                        Regenerate Key
-                      </button>
-                    ) : (
-                      <p className="text-xs text-gray-400 italic">
-                        Please wait 5 minutes before regenerating.
-                      </p>
-                    )}
+            {apiKeys.length !== 0 && !isLoading ? (
+              <>
+                {apiKeys.map((apiKey: any) => (
+                  <div className="bg-gray-100 dark:bg-slate-800 border border-gray-200 dark:border-slate-700 rounded-md px-4 py-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-xs dark:text-slate-400">
+                          Key ID: {apiKey?.prefix}
+                        </p>
+                        <p className="mt-1 font-mono dark:text-white tracking-wider">
+                          ********************
+                        </p>
+                        <p className="mt-1 text-sm dark:text-gray-200">
+                          Last used:{" "}
+                          <span className="dark:text-white">Not use yet!</span>
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <div className="flex gap-2">
+                          {cooldownOver ? (
+                            <button
+                              className="text-xs px-2 py-1 rounded-md border border-yellow-600 dark:text-yellow-400 dark:hover:bg-yellow-700/40"
+                              onClick={() => handleRegenerateKey(apiKey?.id)}
+                            >
+                              Regenerate Key
+                            </button>
+                          ) : (
+                            <p className="text-xs text-gray-400 italic">
+                              Please wait 5 minutes before regenerating.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </div>
-            </div> */}
-            <>
-              <button
-                onClick={handleGenerateSecretKey}
-                className="flex items-center cursor-pointer gap-2 mt-3! text-xs px-3 py-2 rounded-md border border-blue-600 bg-blue-600 text-white hover:bg-blue-700 transition-all"
-              >
-                <Plus size={16} />
-                Generate Secret Key
-              </button>
-            </>
+                ))}
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={handleGenerateSecretKey}
+                  className="flex items-center cursor-pointer gap-2 mt-3! text-xs px-3 py-2 rounded-md border border-blue-600 bg-blue-600 text-white hover:bg-blue-700 transition-all"
+                >
+                  <Plus size={16} />
+                  Generate Api Key
+                </button>
+              </>
+            )}
           </div>
         )}
 
